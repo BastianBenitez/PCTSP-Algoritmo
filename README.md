@@ -74,7 +74,7 @@ Proyecto/
 ├── Codigo_OOP.py           # Implementación principal (Orientado a Objetos)
 ├── Codigo.py               # Implementación alternativa
 ├── README.md               # Documentación del proyecto
-├── PCTSP/                  # Instancias del problema y resultados
+├── PCTSP/                  # Instancias del problema y resultados (DESCARGAR SEPARADAMENTE)
 │   ├── INSTANCES/          # Instancias de prueba
 │   │   ├── Random/         # Instancias generadas aleatoriamente
 │   │   └── Regular/        # Instancias benchmark estándar
@@ -83,6 +83,8 @@ Proyecto/
 │   └── TOURS/              # Tours de soluciones
 └── Rutas/                  # Salidas de visualización generadas
 ```
+
+> **⚠️ Importante**: La carpeta `PCTSP` no está incluida en este repositorio debido a su tamaño. Debe descargarse desde http://webhotel4.ruc.dk/~keld/research/LKH-3/ y colocarse en el directorio raíz del proyecto.
 
 ## 🛠️ Instalación y Requisitos
 
@@ -97,11 +99,16 @@ Proyecto/
 ### Inicio Rápido
 
 1. Clona o descarga el proyecto
-2. Instala las dependencias:
+2. **Descarga las instancias de prueba PCTSP**:
+   - Las instancias de prueba deben descargarse desde: http://webhotel4.ruc.dk/~keld/research/LKH-3/
+   - Estas instancias no están incluidas en el repositorio debido a su tamaño
+   - Descarga y extrae la carpeta `PCTSP` en el directorio raíz del proyecto
+   - Esta carpeta contiene los archivos necesarios para realizar pruebas del algoritmo
+3. Instala las dependencias:
    ```bash
    pip install numpy matplotlib
    ```
-3. Ejecuta el algoritmo principal:
+4. Ejecuta el algoritmo principal:
    ```bash
    python Codigo_OOP.py
    ```
