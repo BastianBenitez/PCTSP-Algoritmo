@@ -30,8 +30,177 @@ import matplotlib.patches as patches
 from matplotlib.colors import ListedColormap
 import time
 import os
-import time
-import os
+import sys
+import subprocess
+from datetime import datetime
+
+
+class GraficoConvergencia:
+    """Clase para generar y gestionar gráficos de convergencia del algoritmo"""
+    
+    def __init__(self, instancia_nombre):
+        """
+        Inicializa el generador de gráficos de convergencia.
+        
+        Args:
+            instancia_nombre: Nombre de la instancia
+        """
+        self.instancia_nombre = instancia_nombre
+        self.iteraciones = []
+        self.costos = []
+        self.mejores_costos = []
+        self.tiempos = []
+        self.tiempo_inicio = None
+        
+        # Crear carpeta específica para esta instancia
+        self.carpeta_instancia = os.path.join("Rutas", self.instancia_nombre)
+        if not os.path.exists(self.carpeta_instancia):
+            os.makedirs(self.carpeta_instancia)
+    
+    def registrar_inicio(self):
+        """Registra el tiempo de inicio del algoritmo."""
+        self.tiempo_inicio = time.time()
+    
+    def registrar_iteracion(self, iteracion, costo_actual, mejor_costo):
+        """
+        Registra los datos de una iteración.
+        
+        Args:
+            iteracion: Número de iteración
+            costo_actual: Costo de la solución actual
+            mejor_costo: Mejor costo encontrado hasta ahora
+        """
+        self.iteraciones.append(iteracion)
+        self.costos.append(costo_actual)
+        self.mejores_costos.append(mejor_costo)
+        
+        if self.tiempo_inicio is not None:
+            tiempo_transcurrido = time.time() - self.tiempo_inicio
+            self.tiempos.append(tiempo_transcurrido)
+        else:
+            self.tiempos.append(0)
+    
+    def generar_grafico_convergencia(self, optimo_conocido=None, mostrar=True):
+        """
+        Genera el gráfico de convergencia.
+        
+        Args:
+            optimo_conocido: Valor óptimo conocido (opcional)
+            mostrar: Si mostrar el gráfico en pantalla
+            
+        Returns:
+            str: Ruta del archivo guardado
+        """
+        if len(self.iteraciones) == 0:
+            print("No hay datos de convergencia para graficar.")
+            return None
+        
+        # Crear figura con subplots
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+        
+        # Gráfico 1: Convergencia por iteraciones
+        ax1.plot(self.iteraciones, self.costos, 'b-', alpha=0.6, linewidth=1, 
+                label='Costo actual', marker='o', markersize=2)
+        ax1.plot(self.iteraciones, self.mejores_costos, 'r-', linewidth=2, 
+                label='Mejor costo', marker='s', markersize=3)
+        
+        # Línea del óptimo conocido si está disponible
+        if optimo_conocido:
+            ax1.axhline(y=optimo_conocido, color='green', linestyle='--', 
+                       linewidth=2, alpha=0.8, label=f'Óptimo conocido: {optimo_conocido:,.0f}')
+        
+        ax1.set_xlabel('Iteración', fontsize=12)
+        ax1.set_ylabel('Costo', fontsize=12)
+        ax1.set_title(f'Convergencia del Algoritmo PVNS - {self.instancia_nombre}', 
+                     fontsize=14, fontweight='bold')
+        ax1.legend(fontsize=10)
+        ax1.grid(True, alpha=0.3)
+        
+        # Formato de números en el eje y
+        ax1.ticklabel_format(style='plain', axis='y')
+        
+        # Gráfico 2: Convergencia por tiempo
+        if len(self.tiempos) > 0 and max(self.tiempos) > 0:
+            ax2.plot(self.tiempos, self.mejores_costos, 'purple', linewidth=2, 
+                    label='Mejor costo', marker='d', markersize=3)
+            
+            if optimo_conocido:
+                ax2.axhline(y=optimo_conocido, color='green', linestyle='--', 
+                           linewidth=2, alpha=0.8, label=f'Óptimo conocido: {optimo_conocido:,.0f}')
+            
+            ax2.set_xlabel('Tiempo (segundos)', fontsize=12)
+            ax2.set_ylabel('Mejor Costo', fontsize=12)
+            ax2.set_title('Convergencia por Tiempo de Ejecución', fontsize=12, fontweight='bold')
+            ax2.legend(fontsize=10)
+            ax2.grid(True, alpha=0.3)
+            ax2.ticklabel_format(style='plain', axis='y')
+        else:
+            ax2.text(0.5, 0.5, 'Datos de tiempo no disponibles', 
+                    ha='center', va='center', transform=ax2.transAxes, fontsize=12)
+            ax2.set_title('Convergencia por Tiempo de Ejecución', fontsize=12, fontweight='bold')
+        
+        # Agregar información estadística
+        if len(self.mejores_costos) > 0:
+            costo_inicial = self.mejores_costos[0]
+            costo_final = self.mejores_costos[-1]
+            mejora_absoluta = costo_inicial - costo_final
+            mejora_porcentual = (mejora_absoluta / costo_inicial) * 100 if costo_inicial > 0 else 0
+            
+            info_text = f"Estadísticas de Convergencia:\n"
+            info_text += f"• Costo inicial: {costo_inicial:,.0f}\n"
+            info_text += f"• Costo final: {costo_final:,.0f}\n"
+            info_text += f"• Mejora absoluta: {mejora_absoluta:,.0f}\n"
+            info_text += f"• Mejora porcentual: {mejora_porcentual:.2f}%\n"
+            info_text += f"• Iteraciones totales: {len(self.iteraciones)}"
+            
+            if optimo_conocido:
+                gap_final = ((costo_final - optimo_conocido) / optimo_conocido) * 100
+                info_text += f"\n• Gap final: {gap_final:.2f}%"
+            
+            # Colocar la información en el gráfico
+            fig.text(0.02, 0.02, info_text, fontsize=10, verticalalignment='bottom',
+                    bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.8))
+        
+        plt.tight_layout()
+        plt.subplots_adjust(bottom=0.15)
+        
+        # Guardar el gráfico
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nombre_archivo = f"convergencia_{self.instancia_nombre}_{timestamp}.png"
+        ruta_archivo = os.path.join(self.carpeta_instancia, nombre_archivo)
+        
+        plt.savefig(ruta_archivo, dpi=300, bbox_inches='tight')
+        print(f"Gráfico de convergencia guardado en: {ruta_archivo}")
+        
+        if mostrar:
+            plt.show()
+        else:
+            plt.close()
+        
+        return ruta_archivo
+    
+    def guardar_datos_csv(self):
+        """
+        Guarda los datos de convergencia en un archivo CSV.
+        
+        Returns:
+            str: Ruta del archivo CSV guardado
+        """
+        if len(self.iteraciones) == 0:
+            return None
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nombre_archivo = f"convergencia_datos_{self.instancia_nombre}_{timestamp}.csv"
+        ruta_archivo = os.path.join(self.carpeta_instancia, nombre_archivo)
+        
+        with open(ruta_archivo, 'w') as f:
+            f.write("Iteracion,Costo_Actual,Mejor_Costo,Tiempo_Segundos\n")
+            for i in range(len(self.iteraciones)):
+                tiempo = self.tiempos[i] if i < len(self.tiempos) else 0
+                f.write(f"{self.iteraciones[i]},{self.costos[i]},{self.mejores_costos[i]},{tiempo:.2f}\n")
+        
+        print(f"Datos de convergencia guardados en: {ruta_archivo}")
+        return ruta_archivo
 
 
 class PCTSPInstance:
@@ -993,13 +1162,18 @@ class VisualizadorSoluciones:
         plt.axis('equal')
         plt.subplots_adjust(left=0.08, right=0.85, top=0.92, bottom=0.08)
         
-        # Guardar automáticamente
-        if not os.path.exists("Rutas"):
-            os.makedirs("Rutas")
+        # Guardar automáticamente en carpeta específica de la instancia
+        carpeta_instancia = os.path.join("Rutas", self.instancia.nombre)
+        if not os.path.exists(carpeta_instancia):
+            os.makedirs(carpeta_instancia)
         
-        nombre_archivo = f"Rutas/solucion_OOP_{self.instancia.nombre}_{estadisticas['rutas_activas']}vendedores_costo{solucion.get_costo():.0f}.png"
-        plt.savefig(nombre_archivo, dpi=300, bbox_inches='tight')
-        print(f"Gráfico guardado en: {nombre_archivo}")
+        # Generar timestamp para el archivo
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nombre_archivo = f"solucion_{self.instancia.nombre}_{estadisticas['rutas_activas']}vendedores_costo{solucion.get_costo():.0f}_{timestamp}.png"
+        ruta_archivo = os.path.join(carpeta_instancia, nombre_archivo)
+        
+        plt.savefig(ruta_archivo, dpi=300, bbox_inches='tight')
+        print(f"Gráfico guardado en: {ruta_archivo}")
         
         plt.show()
         return plt.gcf()
@@ -1419,6 +1593,9 @@ class AlgoritmoPVNS:
         self.visualizador = VisualizadorSoluciones(instancia)
         self.usar_popmusic = usar_popmusic
         
+        # Inicializar gráfico de convergencia
+        self.convergencia = GraficoConvergencia(instancia.nombre)
+        
         if self.usar_popmusic:
             # Configuración automática con parámetros optimizados
             # Los parámetros se configuran automáticamente en POPMUSIC
@@ -1452,7 +1629,7 @@ class AlgoritmoPVNS:
         
         return solucion_mejorada
     
-    def ejecutar(self, iteraciones=500):
+    def ejecutar(self, iteraciones=1000):
         """
         Ejecuta el algoritmo PVNS siguiendo la secuencia exacta del paper:
         1. POPMUSIC inicial (genera aristas candidatas)
@@ -1472,11 +1649,14 @@ class AlgoritmoPVNS:
         
         print(f"Iniciando PVNS para {self.instancia.nombre}")
         
+        # Inicializar rastreo de convergencia (incluye tiempo de POPMUSIC)
+        self.convergencia.registrar_inicio()
+        
         # PASO 1: POPMUSIC INICIAL (solo una vez según el paper)
         if self.usar_popmusic:
             print("PASO 1: Aplicando POPMUSIC para generar aristas candidatas...")
             solucion_inicial = self.constructor.construir_solucion_topologica()
-            solucion_con_aristas = self.popmusic.aplicar_popmusic(solucion_inicial, max_iteraciones=2)
+            solucion_con_aristas = self.popmusic.aplicar_popmusic(solucion_inicial, max_iteraciones=5)
             print(f"POPMUSIC completado. Aristas candidatas generadas.")
         else:
             solucion_con_aristas = None
@@ -1498,6 +1678,9 @@ class AlgoritmoPVNS:
         # PASO 3: PVNS ITERATIVO
         print(f"\nPASO 3: Iniciando PVNS iterativo ({iteraciones} iteraciones)...")
         
+        # Registrar punto inicial
+        self.convergencia.registrar_iteracion(0, mejor_costo, mejor_costo)
+        
         for i in range(iteraciones):
             # Mostrar progreso cada 10 iteraciones
             if (i + 1) % 10 == 0:
@@ -1518,6 +1701,9 @@ class AlgoritmoPVNS:
             # Búsqueda local adicional con 2-opt
             solucion_mejorada = self.busqueda_local_intensiva(solucion_local)
             costo_mejorado = solucion_mejorada.get_costo()
+            
+            # Registrar datos de convergencia
+            self.convergencia.registrar_iteracion(i + 1, costo_mejorado, mejor_costo)
             
             # Aceptación de solución
             if costo_mejorado < mejor_costo:
@@ -1558,6 +1744,11 @@ class AlgoritmoPVNS:
         print("\nGenerando gráfico de la solución...")
         titulo_grafico = f"Solución PVNS {'con POPMUSIC' if self.usar_popmusic else ''} - {self.instancia.nombre}"
         self.visualizador.generar_grafico_solucion(mejor_solucion, titulo_grafico)
+        
+        # Generar gráfico de convergencia
+        print("\nGenerando gráfico de convergencia...")
+        self.convergencia.generar_grafico_convergencia(optimo_conocido)
+        self.convergencia.guardar_datos_csv()
         
         return mejor_solucion, tiempo_transcurrido
     
@@ -1659,7 +1850,7 @@ def main():
         instancia = crear_instancia_ejemplo()
     else:
         # Verificar si existe el archivo específico
-        archivo_instancia = "PCTSP/INSTANCES/Regular/eil101.4.pctsp"
+        archivo_instancia = "PCTSP/INSTANCES/Regular/pcb3038.3.pctsp"
         if os.path.exists(archivo_instancia):
             print(f"Cargando instancia: {archivo_instancia}")
             instancia = PCTSPInstance(archivo_instancia)
@@ -1690,9 +1881,18 @@ def main():
     # Crear y ejecutar algoritmo con POPMUSIC habilitado
     print(f"\nEjecutando algoritmo para instancia: {instancia.nombre}")
     print(f"Ciudades: {instancia.dimension}, Vendedores: {instancia.num_vendedores}")
+    print(f"Los gráficos se guardarán en: Rutas/{instancia.nombre}/")
     
     algoritmo = AlgoritmoPVNS(instancia, usar_popmusic=True)
-    mejor_solucion, tiempo = algoritmo.ejecutar(iteraciones=1000)
+    mejor_solucion, tiempo = algoritmo.ejecutar(iteraciones=1000)  # Reducido para prueba rápida
+    
+    print(f"\n{'='*60}")
+    print(f"EJECUCIÓN COMPLETADA")
+    print(f"{'='*60}")
+    print(f"✓ Gráfico de la solución guardado")
+    print(f"✓ Gráfico de convergencia guardado") 
+    print(f"✓ Datos de convergencia (CSV) guardados")
+    print(f"Ubicación: Rutas/{instancia.nombre}/")
     
     return mejor_solucion, tiempo
 
