@@ -324,6 +324,21 @@ class PCTSPSolution:
         
         return len(violaciones) == 0, violaciones
     
+    def get_vendedor_ciudad(self, ciudad):
+        """
+        Encuentra el vendedor asignado a una ciudad específica.
+        
+        Args:
+            ciudad: ID de la ciudad a buscar
+            
+        Returns:
+            int or None: ID del vendedor que visita la ciudad, None si no está asignada
+        """
+        for vendedor, ruta in self.rutas.items():
+            if ciudad in ruta:
+                return vendedor
+        return None
+    
     def get_estadisticas(self):
         """
         Obtiene estadísticas de la solución.
@@ -993,167 +1008,200 @@ class VisualizadorSoluciones:
 class POPMUSIC:
     """
     Implementación de POPMUSIC (Partial Optimization Metaheuristic Under Special Intensification Conditions)
-    para el problema PCTSP
+    para el problema PCTSP con parámetros optimizados
     """
     
-    def __init__(self, instancia, tamano_subproblema=15, solapamiento=5):
+    def __init__(self, instancia, tamano_subproblema=None, solapamiento=None, 
+                 max_iteraciones=None, umbral_mejora=0.01):
         """
-        Inicializa POPMUSIC.
+        Inicializa POPMUSIC con parámetros adaptativos optimizados.
         
         Args:
             instancia: Instancia PCTSPInstance
-            tamano_subproblema: Tamaño máximo de cada subproblema
-            solapamiento: Número de ciudades que se solapan entre subproblemas
+            tamano_subproblema: Tamaño máximo de cada subproblema (None = automático)
+            solapamiento: Número de ciudades que se solapan (None = automático)
+            max_iteraciones: Número máximo de iteraciones (None = automático)
+            umbral_mejora: Umbral mínimo de mejora para continuar iteraciones
         """
         self.instancia = instancia
-        self.tamano_subproblema = tamano_subproblema
-        self.solapamiento = solapamiento
+        self.umbral_mejora = umbral_mejora
+        
+        # Configuración adaptativa basada en el tamaño de la instancia
+        if tamano_subproblema is None:
+            if instancia.dimension > 500:
+                self.tamano_subproblema = min(30, max(25, instancia.dimension // 20))
+            elif instancia.dimension > 100:
+                self.tamano_subproblema = min(25, max(18, instancia.dimension // 15))
+            else:
+                self.tamano_subproblema = min(18, max(15, instancia.dimension // 8))
+        else:
+            self.tamano_subproblema = tamano_subproblema
+        
+        # Solapamiento como 35% del tamaño del subproblema
+        if solapamiento is None:
+            self.solapamiento = max(3, min(10, int(self.tamano_subproblema * 0.35)))
+        else:
+            self.solapamiento = solapamiento
+        
+        # Iteraciones máximas adaptativas
+        if max_iteraciones is None:
+            if instancia.dimension > 500:
+                self.max_iteraciones = 7
+            elif instancia.dimension > 100:
+                self.max_iteraciones = 5
+            else:
+                self.max_iteraciones = 4
+        else:
+            self.max_iteraciones = max_iteraciones
+        
         self.busqueda_local = OperadoresBusquedaLocal(instancia)
         self.constructor = ConstructorSolucionGreedy(instancia)
+        
+        print(f"POPMUSIC configurado: subproblema={self.tamano_subproblema}, "
+              f"solapamiento={self.solapamiento}, max_iter={self.max_iteraciones}")
     
-    def generar_subproblemas(self, solucion):
+    def generar_subproblemas_mejorado(self, solucion):
         """
-        Genera subproblemas basados en la proximidad geográfica y restricciones.
+        Genera subproblemas con estrategias mejoradas:
+        1. Subproblemas basados en densidad de precedencias
+        2. Subproblemas de ciudades críticas (alto costo)
+        3. Subproblemas geográficos tradicionales
         
         Args:
             solucion: Solución actual
             
         Returns:
-            list: Lista de subproblemas (conjuntos de ciudades)
+            list: Lista de subproblemas prioritizados
         """
         subproblemas = []
-        ciudades_procesadas = set()
         
-        # Obtener todas las ciudades visitadas en la solución
-        todas_ciudades = []
-        for vendedor, ruta in solucion.rutas.items():
-            todas_ciudades.extend(ruta)
-        
-        if len(todas_ciudades) == 0:
-            return []
-        
-        # Generar subproblemas basados en proximidad en las rutas
-        for vendedor, ruta in solucion.rutas.items():
-            if len(ruta) > self.tamano_subproblema:
-                # Dividir rutas largas en segmentos
-                for i in range(0, len(ruta), self.tamano_subproblema - self.solapamiento):
-                    inicio = max(0, i - self.solapamiento // 2)
-                    fin = min(len(ruta), i + self.tamano_subproblema)
-                    subproblema = ruta[inicio:fin]
-                    
-                    if len(subproblema) >= 3:  # Mínimo 3 ciudades para ser útil
-                        subproblemas.append({
-                            'ciudades': subproblema,
-                            'vendedor_principal': vendedor,
-                            'tipo': 'ruta_segmento'
-                        })
-        
-        # Generar subproblemas inter-ruta (ciudades cercanas entre diferentes rutas)
-        vendedores_con_rutas = [v for v, r in solucion.rutas.items() if len(r) > 0]
-        
-        for i, v1 in enumerate(vendedores_con_rutas):
-            for v2 in vendedores_con_rutas[i+1:]:
-                subproblema_inter = self._generar_subproblema_inter_ruta(
-                    solucion, v1, v2
-                )
-                if len(subproblema_inter) >= 4:
-                    subproblemas.append({
-                        'ciudades': subproblema_inter,
-                        'vendedores': [v1, v2],
-                        'tipo': 'inter_ruta'
-                    })
-        
-        # Generar subproblemas basados en restricciones de precedencia
+        # 1. Subproblemas basados en precedencias críticas
         if self.instancia.precedence:
-            subproblema_precedencia = self._generar_subproblema_precedencia(solucion)
-            if len(subproblema_precedencia) >= 3:
+            subprob_precedencia = self._generar_subproblema_precedencia_critica(solucion)
+            if len(subprob_precedencia) >= 4:
                 subproblemas.append({
-                    'ciudades': subproblema_precedencia,
-                    'tipo': 'precedencia'
+                    'ciudades': subprob_precedencia,
+                    'tipo': 'precedencia_critica',
+                    'prioridad': 1
                 })
+        
+        # 2. Subproblemas de aristas costosas
+        subprob_costoso = self._generar_subproblema_aristas_costosas(solucion)
+        if len(subprob_costoso) >= 4:
+            subproblemas.append({
+                'ciudades': subprob_costoso,
+                'tipo': 'aristas_costosas',
+                'prioridad': 2
+            })
+        
+        # 3. Subproblemas geográficos tradicionales (mejorados)
+        subprob_geograficos = self._generar_subproblemas_geograficos_mejorados(solucion)
+        subproblemas.extend(subprob_geograficos)
+        
+        # Ordenar por prioridad
+        subproblemas.sort(key=lambda x: x.get('prioridad', 3))
         
         return subproblemas
     
-    def _generar_subproblema_inter_ruta(self, solucion, vendedor1, vendedor2):
+    def _generar_subproblema_precedencia_critica(self, solucion):
         """
-        Genera un subproblema con ciudades cercanas entre dos rutas.
+        Genera subproblema enfocado en precedencias que causan mayor restricción.
+        """
+        # Identificar precedencias que más limitan la solución
+        precedencias_criticas = []
         
-        Args:
-            solucion: Solución actual
-            vendedor1, vendedor2: Vendedores cuyas rutas considerar
+        for i, j in self.instancia.precedence:
+            # Calcular si esta precedencia está causando rutas largas
+            vendedor_i = solucion.get_vendedor_ciudad(i)
+            vendedor_j = solucion.get_vendedor_ciudad(j)
             
-        Returns:
-            list: Lista de ciudades para el subproblema
+            if vendedor_i != vendedor_j or vendedor_i is None or vendedor_j is None:
+                # Precedencia violada o en rutas diferentes - crítica
+                precedencias_criticas.extend([i, j])
+        
+        # Agregar ciudades cercanas para completar el subproblema
+        ciudades_subproblema = set(precedencias_criticas)
+        
+        for ciudad_base in list(ciudades_subproblema):
+            if len(ciudades_subproblema) >= self.tamano_subproblema:
+                break
+            
+            # Buscar ciudades cercanas no asignadas o mal posicionadas
+            candidatos = []
+            for vendedor, ruta in solucion.rutas.items():
+                for ciudad in ruta:
+                    if ciudad not in ciudades_subproblema:
+                        dist = self.instancia.distancia(ciudad_base, ciudad)
+                        if dist != float('inf'):
+                            candidatos.append((ciudad, dist))
+            
+            candidatos.sort(key=lambda x: x[1])
+            for ciudad, _ in candidatos[:3]:
+                ciudades_subproblema.add(ciudad)
+                if len(ciudades_subproblema) >= self.tamano_subproblema:
+                    break
+        
+        return list(ciudades_subproblema)
+    
+    def _generar_subproblema_aristas_costosas(self, solucion):
         """
-        ruta1 = solucion.rutas[vendedor1]
-        ruta2 = solucion.rutas[vendedor2]
+        Genera subproblema con las aristas más costosas de la solución actual.
+        """
+        aristas_costos = []
         
-        # Encontrar pares de ciudades cercanas entre las dos rutas
-        pares_cercanos = []
+        # Identificar aristas más costosas en todas las rutas
+        for vendedor, ruta in solucion.rutas.items():
+            for i in range(len(ruta) - 1):
+                ciudad_actual = ruta[i]
+                ciudad_siguiente = ruta[i + 1]
+                costo = self.instancia.distancia(ciudad_actual, ciudad_siguiente)
+                if costo != float('inf'):
+                    aristas_costos.append((ciudad_actual, ciudad_siguiente, costo))
         
-        for c1 in ruta1:
-            for c2 in ruta2:
-                distancia = self.instancia.distancia(c1, c2)
-                if distancia != float('inf'):
-                    pares_cercanos.append((c1, c2, distancia))
-        
-        # Ordenar por distancia y tomar los más cercanos
-        pares_cercanos.sort(key=lambda x: x[2])
+        # Ordenar por costo descendente y tomar las más costosas
+        aristas_costos.sort(key=lambda x: x[2], reverse=True)
         
         ciudades_subproblema = set()
-        for c1, c2, _ in pares_cercanos[:self.tamano_subproblema // 2]:
-            ciudades_subproblema.add(c1)
-            ciudades_subproblema.add(c2)
+        for ciudad1, ciudad2, _ in aristas_costos[:self.tamano_subproblema // 2]:
+            ciudades_subproblema.add(ciudad1)
+            ciudades_subproblema.add(ciudad2)
             
             if len(ciudades_subproblema) >= self.tamano_subproblema:
                 break
         
         return list(ciudades_subproblema)
     
-    def _generar_subproblema_precedencia(self, solucion):
+    def _generar_subproblemas_geograficos_mejorados(self, solucion):
         """
-        Genera un subproblema enfocado en restricciones de precedencia.
-        
-        Args:
-            solucion: Solución actual
-            
-        Returns:
-            list: Lista de ciudades involucradas en precedencias
+        Versión mejorada de generación de subproblemas geográficos.
         """
-        ciudades_precedencia = set()
+        subproblemas = []
         
-        for i, j in self.instancia.precedence:
-            ciudades_precedencia.add(i)
-            ciudades_precedencia.add(j)
-            
-            if len(ciudades_precedencia) >= self.tamano_subproblema:
-                break
-        
-        # Agregar ciudades cercanas para completar el subproblema
-        todas_ciudades = []
-        for ruta in solucion.rutas.values():
-            todas_ciudades.extend(ruta)
-        
-        for ciudad in list(ciudades_precedencia):
-            if len(ciudades_precedencia) >= self.tamano_subproblema:
-                break
+        # Generar subproblemas con solapamiento inteligente
+        for vendedor, ruta in solucion.rutas.items():
+            if len(ruta) > self.tamano_subproblema:
+                # Solapamiento adaptativo basado en la longitud de la ruta
+                solapamiento_local = min(self.solapamiento, len(ruta) // 4)
+                paso = max(1, self.tamano_subproblema - solapamiento_local)
                 
-            # Buscar ciudades cercanas
-            distancias = [(c, self.instancia.distancia(ciudad, c)) 
-                         for c in todas_ciudades 
-                         if c not in ciudades_precedencia]
-            distancias.sort(key=lambda x: x[1])
-            
-            for c, _ in distancias[:3]:
-                ciudades_precedencia.add(c)
-                if len(ciudades_precedencia) >= self.tamano_subproblema:
-                    break
+                for i in range(0, len(ruta), paso):
+                    inicio = max(0, i - solapamiento_local // 2)
+                    fin = min(len(ruta), i + self.tamano_subproblema)
+                    subproblema = ruta[inicio:fin]
+                    
+                    if len(subproblema) >= 4:
+                        subproblemas.append({
+                            'ciudades': subproblema,
+                            'vendedor_principal': vendedor,
+                            'tipo': 'geografico_mejorado',
+                            'prioridad': 3
+                        })
         
-        return list(ciudades_precedencia)
+        return subproblemas
     
     def resolver_subproblema(self, solucion, subproblema):
         """
-        Resuelve un subproblema específico usando optimización local intensiva.
+        Resuelve un subproblema específico usando optimización local intensiva adaptativa.
         
         Args:
             solucion: Solución actual
@@ -1174,8 +1222,18 @@ class POPMUSIC:
         mejor_subsolucion = solucion_temp.copy()
         mejor_costo = mejor_subsolucion.get_costo()
         
-        # Múltiples pasadas de optimización
-        for _ in range(5):
+        # Número de pasadas adaptativo según tamaño del subproblema
+        if len(ciudades_subproblema) <= 15:
+            max_pasadas = 8
+        elif len(ciudades_subproblema) <= 25:
+            max_pasadas = 6
+        else:
+            max_pasadas = 4
+        
+        sin_mejora = 0
+        for pasada in range(max_pasadas):
+            costo_antes_pasada = mejor_costo
+            
             # 2-opt en cada ruta del subproblema
             for vendedor in self.instancia.vendedores:
                 if len(mejor_subsolucion.rutas[vendedor]) > 3:
@@ -1183,17 +1241,30 @@ class POPMUSIC:
                     mejor_subsolucion.rutas[vendedor] = nueva_ruta
                     mejor_subsolucion.invalidar_cache()
             
-            # Relocalizaciones entre rutas
-            subsolucion_reloc = self.busqueda_local.relocate_inter_route(mejor_subsolucion)
-            if subsolucion_reloc.get_costo() < mejor_costo:
-                mejor_subsolucion = subsolucion_reloc
-                mejor_costo = mejor_subsolucion.get_costo()
+            # Relocalizaciones entre rutas (más frecuentes para subproblemas críticos)
+            probabilidad_reloc = 0.7 if subproblema.get('prioridad', 3) <= 2 else 0.4
+            if random.random() < probabilidad_reloc:
+                subsolucion_reloc = self.busqueda_local.relocate_inter_route(mejor_subsolucion)
+                if subsolucion_reloc.get_costo() < mejor_costo:
+                    mejor_subsolucion = subsolucion_reloc
+                    mejor_costo = mejor_subsolucion.get_costo()
             
             # Intercambios entre rutas
-            subsolucion_exch = self.busqueda_local.exchange_inter_route(mejor_subsolucion)
-            if subsolucion_exch.get_costo() < mejor_costo:
-                mejor_subsolucion = subsolucion_exch
-                mejor_costo = mejor_subsolucion.get_costo()
+            probabilidad_exch = 0.5 if subproblema.get('prioridad', 3) <= 2 else 0.3
+            if random.random() < probabilidad_exch:
+                subsolucion_exch = self.busqueda_local.exchange_inter_route(mejor_subsolucion)
+                if subsolucion_exch.get_costo() < mejor_costo:
+                    mejor_subsolucion = subsolucion_exch
+                    mejor_costo = mejor_subsolucion.get_costo()
+            
+            # Verificar convergencia
+            mejora_relativa = (costo_antes_pasada - mejor_costo) / max(costo_antes_pasada, 1)
+            if mejora_relativa < 0.001:  # Mejora menor al 0.1%
+                sin_mejora += 1
+                if sin_mejora >= 2:
+                    break
+            else:
+                sin_mejora = 0
         
         # Reintegrar la subsolucion optimizada en la solución completa
         solucion_mejorada = self._integrar_subsolucion(solucion, mejor_subsolucion, ciudades_subproblema)
@@ -1267,53 +1338,66 @@ class POPMUSIC:
         solucion_integrada.invalidar_cache()
         return solucion_integrada
     
-    def aplicar_popmusic(self, solucion, max_iteraciones=3):
+    def aplicar_popmusic(self, solucion, max_iteraciones=None):
         """
-        Aplica el algoritmo POPMUSIC completo a una solución.
+        Aplica el algoritmo POPMUSIC completo con criterios de parada mejorados.
         
         Args:
             solucion: Solución inicial
-            max_iteraciones: Número máximo de iteraciones POPMUSIC
+            max_iteraciones: Número máximo de iteraciones (None = usar configurado)
             
         Returns:
             PCTSPSolution: Solución mejorada
         """
+        if max_iteraciones is None:
+            max_iteraciones = self.max_iteraciones
+            
         mejor_solucion = solucion.copy()
         mejor_costo = mejor_solucion.get_costo()
+        costo_inicial = mejor_costo
         
         print(f"Iniciando POPMUSIC - Costo inicial: {mejor_costo:,.0f}")
+        print(f"Parámetros: subproblema={self.tamano_subproblema}, solapamiento={self.solapamiento}")
         
         for iteracion in range(max_iteraciones):
             print(f"POPMUSIC iteración {iteracion + 1}/{max_iteraciones}")
             
-            # Generar subproblemas
-            subproblemas = self.generar_subproblemas(mejor_solucion)
+            # Generar subproblemas con estrategia mejorada
+            subproblemas = self.generar_subproblemas_mejorado(mejor_solucion)
             print(f"  Generados {len(subproblemas)} subproblemas")
             
+            costo_antes_iteracion = mejor_costo
             mejoro_iteracion = False
             
             # Resolver cada subproblema
             for i, subproblema in enumerate(subproblemas):
                 if len(subproblema['ciudades']) >= 3:
-                    print(f"  Resolviendo subproblema {i+1}/{len(subproblemas)} "
-                          f"(tamaño: {len(subproblema['ciudades'])})")
+                    tipo = subproblema.get('tipo', 'desconocido')
+                    prioridad = subproblema.get('prioridad', 3)
+                    print(f"  Subproblema {i+1}/{len(subproblemas)} "
+                          f"(tamaño: {len(subproblema['ciudades'])}, tipo: {tipo}, prioridad: {prioridad})")
                     
                     solucion_mejorada = self.resolver_subproblema(mejor_solucion, subproblema)
                     costo_mejorado = solucion_mejorada.get_costo()
                     
                     if costo_mejorado < mejor_costo:
-                        print(f"    Mejora encontrada: {mejor_costo:,.0f} -> {costo_mejorado:,.0f}")
+                        mejora = ((mejor_costo - costo_mejorado) / mejor_costo) * 100
+                        print(f"    Mejora encontrada: {mejor_costo:,.0f} -> {costo_mejorado:,.0f} ({mejora:.2f}%)")
                         mejor_solucion = solucion_mejorada
                         mejor_costo = costo_mejorado
                         mejoro_iteracion = True
             
-            if not mejoro_iteracion:
-                print(f"  No se encontraron mejoras en iteración {iteracion + 1}")
+            # Evaluar criterio de parada
+            mejora_iteracion = ((costo_antes_iteracion - mejor_costo) / max(costo_antes_iteracion, 1)) * 100
+            
+            if mejora_iteracion < self.umbral_mejora * 100:
+                print(f"  Mejora insuficiente ({mejora_iteracion:.3f}% < {self.umbral_mejora*100:.1f}%) - terminando")
                 break
             else:
-                print(f"  Costo después de iteración {iteracion + 1}: {mejor_costo:,.0f}")
+                print(f"  Costo después de iteración {iteracion + 1}: {mejor_costo:,.0f} (mejora: {mejora_iteracion:.2f}%)")
         
-        print(f"POPMUSIC completado - Costo final: {mejor_costo:,.0f}")
+        mejora_total = ((costo_inicial - mejor_costo) / max(costo_inicial, 1)) * 100
+        print(f"POPMUSIC completado - Costo final: {mejor_costo:,.0f} (mejora total: {mejora_total:.2f}%)")
         return mejor_solucion
 
 
@@ -1336,18 +1420,9 @@ class AlgoritmoPVNS:
         self.usar_popmusic = usar_popmusic
         
         if self.usar_popmusic:
-            # Configurar POPMUSIC según el tamaño de la instancia
-            if instancia.dimension > 1000:
-                tamano_subproblema = 20
-                solapamiento = 8
-            elif instancia.dimension > 500:
-                tamano_subproblema = 15
-                solapamiento = 5
-            else:
-                tamano_subproblema = 12
-                solapamiento = 4
-                
-            self.popmusic = POPMUSIC(instancia, tamano_subproblema, solapamiento)
+            # Configuración automática con parámetros optimizados
+            # Los parámetros se configuran automáticamente en POPMUSIC
+            self.popmusic = POPMUSIC(instancia)
     
     def busqueda_local_intensiva(self, solucion):
         """
@@ -1379,7 +1454,10 @@ class AlgoritmoPVNS:
     
     def ejecutar(self, iteraciones=500):
         """
-        Ejecuta el algoritmo PVNS con POPMUSIC.
+        Ejecuta el algoritmo PVNS siguiendo la secuencia exacta del paper:
+        1. POPMUSIC inicial (genera aristas candidatas)
+        2. Construcción greedy topológica
+        3. PVNS iterativo (Shaking: CEM+CMI, Búsqueda local: C2-EX+P3-EX)
         
         Args:
             iteraciones: Número de iteraciones a ejecutar
@@ -1392,53 +1470,56 @@ class AlgoritmoPVNS:
         # Obtener óptimo conocido
         optimo_conocido = self.instancia.get_optimo_conocido()
         
-        # Solución inicial
+        print(f"Iniciando PVNS para {self.instancia.nombre}")
+        
+        # PASO 1: POPMUSIC INICIAL (solo una vez según el paper)
+        if self.usar_popmusic:
+            print("PASO 1: Aplicando POPMUSIC para generar aristas candidatas...")
+            solucion_inicial = self.constructor.construir_solucion_topologica()
+            solucion_con_aristas = self.popmusic.aplicar_popmusic(solucion_inicial, max_iteraciones=2)
+            print(f"POPMUSIC completado. Aristas candidatas generadas.")
+        else:
+            solucion_con_aristas = None
+        
+        # PASO 2: CONSTRUCCIÓN GREEDY TOPOLÓGICA
+        print("\nPASO 2: Construcción greedy topológica...")
         solucion_actual = self.constructor.construir_solucion_topologica()
+        if self.usar_popmusic and solucion_con_aristas:
+            # Usar información de POPMUSIC si está disponible
+            if solucion_con_aristas.get_costo() < solucion_actual.get_costo():
+                solucion_actual = solucion_con_aristas
+        
         mejor_solucion = solucion_actual.copy()
         mejor_costo = mejor_solucion.get_costo()
         sin_mejora = 0
         
-        # Historial para convergencia
-        historial_costos = [mejor_costo]
+        print(f"Solución inicial: {mejor_costo:,.0f}")
         
-        print(f"Iniciando PVNS{'+ POPMUSIC' if self.usar_popmusic else ''} para {self.instancia.nombre}")
-        print(f"Costo inicial: {mejor_costo:,.0f}")
-        
-        # Aplicar POPMUSIC inicial si está habilitado
-        if self.usar_popmusic and mejor_costo != float('inf'):
-            print("\nAplicando POPMUSIC inicial...")
-            solucion_popmusic = self.popmusic.aplicar_popmusic(mejor_solucion, max_iteraciones=2)
-            if solucion_popmusic.get_costo() < mejor_costo:
-                mejor_solucion = solucion_popmusic
-                mejor_costo = mejor_solucion.get_costo()
-                solucion_actual = mejor_solucion.copy()
-                print(f"POPMUSIC mejoró la solución inicial: {mejor_costo:,.0f}")
+        # PASO 3: PVNS ITERATIVO
+        print(f"\nPASO 3: Iniciando PVNS iterativo ({iteraciones} iteraciones)...")
         
         for i in range(iteraciones):
-            # Mostrar progreso
-            if optimo_conocido:
-                gap_actual = ((mejor_costo - optimo_conocido) / optimo_conocido * 100)
-                print(f"Iteración {i+1}/{iteraciones} - Gap: {gap_actual:.2f}%")
-            else:
-                print(f"Iteración {i+1}/{iteraciones} - Costo: {mejor_costo:,.0f}")
+            # Mostrar progreso cada 10 iteraciones
+            if (i + 1) % 10 == 0:
+                if optimo_conocido:
+                    gap_actual = ((mejor_costo - optimo_conocido) / optimo_conocido * 100)
+                    print(f"Iteración {i+1}/{iteraciones} - Gap: {gap_actual:.2f}%")
+                else:
+                    print(f"Iteración {i+1}/{iteraciones} - Costo: {mejor_costo:,.0f}")
             
-            # Búsqueda local intensiva
-            solucion_mejorada = self.busqueda_local_intensiva(solucion_actual)
+            # SHAKING: CEM + CMI (según el paper)
+            solucion_perturbada = self.perturbacion.cem(solucion_actual)
+            solucion_perturbada = self.perturbacion.cmi(solucion_perturbada)
+            
+            # BÚSQUEDA LOCAL: C2-EX + P3-EX (según el paper)
+            solucion_local = self.perturbacion.c2_ex(solucion_perturbada)
+            solucion_local = self.perturbacion.p3_ex(solucion_local)
+            
+            # Búsqueda local adicional con 2-opt
+            solucion_mejorada = self.busqueda_local_intensiva(solucion_local)
             costo_mejorado = solucion_mejorada.get_costo()
             
-            # Si no mejoró, aplicar perturbación
-            if costo_mejorado >= solucion_actual.get_costo():
-                if random.random() < 0.7:
-                    solucion_mejorada = self.busqueda_local.relocate_inter_route(solucion_actual)
-                elif random.random() < 0.9:
-                    solucion_mejorada = self.busqueda_local.exchange_inter_route(solucion_actual)
-                else:
-                    solucion_temp = self.perturbacion.cem(solucion_actual)
-                    solucion_mejorada = self.perturbacion.cmi(solucion_temp)
-                
-                costo_mejorado = solucion_mejorada.get_costo()
-            
-            # Actualizar mejor solución
+            # Aceptación de solución
             if costo_mejorado < mejor_costo:
                 mejor_solucion = solucion_mejorada.copy()
                 mejor_costo = costo_mejorado
@@ -1448,55 +1529,34 @@ class AlgoritmoPVNS:
                 # Búsqueda intensiva si estamos cerca del óptimo
                 if optimo_conocido:
                     gap_actual = ((mejor_costo - optimo_conocido) / optimo_conocido * 100)
-                    if gap_actual <= 5.0:
-                        for _ in range(5):
+                    if gap_actual <= 3.0:
+                        for _ in range(3):
                             solucion_intensiva = self.busqueda_local_intensiva(mejor_solucion)
                             if solucion_intensiva.get_costo() < mejor_costo:
                                 mejor_solucion = solucion_intensiva
                                 mejor_costo = solucion_intensiva.get_costo()
             else:
                 sin_mejora += 1
-                solucion_actual = solucion_mejorada  # Mantener diversidad
+                # Aceptar solución perturbada para mantener diversidad
+                solucion_actual = solucion_mejorada
             
-            # Aplicar POPMUSIC periódicamente
-            if (self.usar_popmusic and sin_mejora >= 25 and sin_mejora % 25 == 0 and 
-                mejor_costo != float('inf')):
-                print(f"\nAplicando POPMUSIC en iteración {i+1}...")
-                solucion_popmusic = self.popmusic.aplicar_popmusic(mejor_solucion, max_iteraciones=1)
-                if solucion_popmusic.get_costo() < mejor_costo:
-                    mejor_solucion = solucion_popmusic
-                    mejor_costo = mejor_solucion.get_costo()
-                    solucion_actual = mejor_solucion.copy()
-                    sin_mejora = 0
-                    print(f"POPMUSIC encontró mejora: {mejor_costo:,.0f}")
-            
-            # Diversificación
-            if sin_mejora >= 75:
+            # Diversificación: reconstruir si no hay mejora por mucho tiempo
+            if sin_mejora >= 50:
                 solucion_actual = self.constructor.construir_solucion_topologica()
                 sin_mejora = 0
-            
-            historial_costos.append(mejor_costo)
-        
-        # POPMUSIC final intensivo
-        if self.usar_popmusic and mejor_costo != float('inf'):
-            print("\nAplicando POPMUSIC final...")
-            solucion_popmusic_final = self.popmusic.aplicar_popmusic(mejor_solucion, max_iteraciones=3)
-            if solucion_popmusic_final.get_costo() < mejor_costo:
-                mejor_solucion = solucion_popmusic_final
-                mejor_costo = mejor_solucion.get_costo()
-                print(f"POPMUSIC final mejoró la solución: {mejor_costo:,.0f}")
         
         tiempo_fin = time.time()
         tiempo_transcurrido = tiempo_fin - tiempo_inicio
         
-        print(f"\nCosto final: {mejor_costo:,.0f}")
+        print(f"\nPVNS completado.")
+        print(f"Costo final: {mejor_costo:,.0f}")
         
         # Mostrar resumen
         self._mostrar_resumen_final(mejor_solucion, optimo_conocido, tiempo_transcurrido)
         
         # Generar gráfico
         print("\nGenerando gráfico de la solución...")
-        titulo_grafico = f"Solución PCTSP {'con POPMUSIC' if self.usar_popmusic else ''} - {self.instancia.nombre}"
+        titulo_grafico = f"Solución PVNS {'con POPMUSIC' if self.usar_popmusic else ''} - {self.instancia.nombre}"
         self.visualizador.generar_grafico_solucion(mejor_solucion, titulo_grafico)
         
         return mejor_solucion, tiempo_transcurrido
@@ -1510,7 +1570,7 @@ class AlgoritmoPVNS:
             tiempo_transcurrido: Tiempo de ejecución
         """
         print("\n" + "=" * 80)
-        print("RESUMEN FINAL DE LA EJECUCIÓN (Versión OOP con POPMUSIC)")
+        print("RESUMEN FINAL DE LA EJECUCIÓN (PVNS con POPMUSIC según paper)")
         print("=" * 80)
         
         # Información del archivo
@@ -1599,7 +1659,7 @@ def main():
         instancia = crear_instancia_ejemplo()
     else:
         # Verificar si existe el archivo específico
-        archivo_instancia = "PCTSP/INSTANCES/Regular/pcb3038.6.pctsp"
+        archivo_instancia = "PCTSP/INSTANCES/Regular/eil101.4.pctsp"
         if os.path.exists(archivo_instancia):
             print(f"Cargando instancia: {archivo_instancia}")
             instancia = PCTSPInstance(archivo_instancia)
@@ -1632,7 +1692,7 @@ def main():
     print(f"Ciudades: {instancia.dimension}, Vendedores: {instancia.num_vendedores}")
     
     algoritmo = AlgoritmoPVNS(instancia, usar_popmusic=True)
-    mejor_solucion, tiempo = algoritmo.ejecutar(iteraciones=100)  # Menos iteraciones para la demo
+    mejor_solucion, tiempo = algoritmo.ejecutar(iteraciones=1000)
     
     return mejor_solucion, tiempo
 
