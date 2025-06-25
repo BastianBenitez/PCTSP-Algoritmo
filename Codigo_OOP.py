@@ -1850,7 +1850,7 @@ def main():
         instancia = crear_instancia_ejemplo()
     else:
         # Verificar si existe el archivo específico
-        archivo_instancia = "PCTSP/INSTANCES/Regular/pcb3038.3.pctsp"
+        archivo_instancia = "PCTSP/INSTANCES/Regular/vm1748.6.pctsp"
         if os.path.exists(archivo_instancia):
             print(f"Cargando instancia: {archivo_instancia}")
             instancia = PCTSPInstance(archivo_instancia)
